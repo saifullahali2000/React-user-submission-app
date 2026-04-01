@@ -443,13 +443,3 @@ if sheet_url:
                     successes[["user_id", "filename", "size", "drive_link"]],
                     use_container_width=True,
                 )
-
-else:
-    st.markdown("---")
-    st.markdown(
-        "### How to use\n\n"
-        "1. Place `credentials.json` in the same folder as this app\n"
-        "2. Click **Authenticate with Google** in the sidebar\n"
-        "3. Paste your Google Sheet URL (must be publicly shared)\n"
-        "4. Click **Download & Upload** — files go straight to your Drive!\n"
-    )
