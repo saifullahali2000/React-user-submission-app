@@ -27,6 +27,22 @@ SCOPES = ["https://www.googleapis.com/auth/drive.file"]
 TOKEN_FILE = "token.json"
 CREDENTIALS_FILE = "credentials.json"
 
+# Write credentials.json from Streamlit Secrets if running on the cloud
+if not os.path.exists(CREDENTIALS_FILE) and "gcp_credentials" in st.secrets:
+    creds_data = {
+        "installed": {
+            "client_id": st.secrets["gcp_credentials"]["client_id"],
+            "project_id": st.secrets["gcp_credentials"]["project_id"],
+            "auth_uri": st.secrets["gcp_credentials"]["auth_uri"],
+            "token_uri": st.secrets["gcp_credentials"]["token_uri"],
+            "auth_provider_x509_cert_url": st.secrets["gcp_credentials"]["auth_provider_x509_cert_url"],
+            "client_secret": st.secrets["gcp_credentials"]["client_secret"],
+            "redirect_uris": st.secrets["gcp_credentials"]["redirect_uris"],
+        }
+    }
+    with open(CREDENTIALS_FILE, "w") as f:
+        json.dump(creds_data, f)
+
 st.set_page_config(
     page_title="Sheet → Drive Uploader",
     page_icon="📤",
