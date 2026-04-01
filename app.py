@@ -37,11 +37,25 @@ if not os.path.exists(CREDENTIALS_FILE) and "gcp_credentials" in st.secrets:
             "token_uri": st.secrets["gcp_credentials"]["token_uri"],
             "auth_provider_x509_cert_url": st.secrets["gcp_credentials"]["auth_provider_x509_cert_url"],
             "client_secret": st.secrets["gcp_credentials"]["client_secret"],
-            "redirect_uris": st.secrets["gcp_credentials"]["redirect_uris"],
+            "redirect_uris": list(st.secrets["gcp_credentials"]["redirect_uris"]),
         }
     }
     with open(CREDENTIALS_FILE, "w") as f:
         json.dump(creds_data, f)
+
+# Write token.json from Streamlit Secrets if running on the cloud
+if not os.path.exists(TOKEN_FILE) and "gcp_token" in st.secrets:
+    token_data = {
+        "token": st.secrets["gcp_token"]["token"],
+        "refresh_token": st.secrets["gcp_token"]["refresh_token"],
+        "token_uri": st.secrets["gcp_token"]["token_uri"],
+        "client_id": st.secrets["gcp_token"]["client_id"],
+        "client_secret": st.secrets["gcp_token"]["client_secret"],
+        "scopes": list(st.secrets["gcp_token"]["scopes"]),
+        "universe_domain": st.secrets["gcp_token"]["universe_domain"],
+    }
+    with open(TOKEN_FILE, "w") as f:
+        json.dump(token_data, f)
 
 st.set_page_config(
     page_title="Sheet → Drive Uploader",
@@ -80,17 +94,10 @@ def get_drive_service():
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
+            with open(TOKEN_FILE, "w") as token:
+                token.write(creds.to_json())
         else:
-            if not os.path.exists(CREDENTIALS_FILE):
-                return None
-            flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_FILE, SCOPES)
-            try:
-                creds = flow.run_local_server(port=OAUTH_LOCAL_SERVER_PORT)
-            except OSError:
-                creds = flow.run_local_server(port=0)
-
-        with open(TOKEN_FILE, "w") as token:
-            token.write(creds.to_json())
+            return None  # Cannot open browser on cloud — token must come from Secrets
 
     return build("drive", "v3", credentials=creds)
 
