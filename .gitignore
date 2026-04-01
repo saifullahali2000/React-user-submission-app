@@ -1,0 +1,16 @@
+# Google OAuth credentials — NEVER commit these
+credentials.json
+token.json
+
+# Environment variables
+.env
+
+# Downloaded files (temporary)
+downloads/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
