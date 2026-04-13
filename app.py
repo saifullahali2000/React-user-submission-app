@@ -113,6 +113,12 @@ def _get_redirect_uri(client_config: dict) -> str | None:
     if configured_uri:
         return configured_uri
 
+    # Prefer deployed HTTPS redirect over localhost in cloud environments.
+    for uri in redirect_uris:
+        lower_uri = uri.lower()
+        if lower_uri.startswith("https://") and "localhost" not in lower_uri and "127.0.0.1" not in lower_uri:
+            return uri
+
     return redirect_uris[0]
 
 
