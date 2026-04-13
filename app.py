@@ -31,6 +31,25 @@ OAUTH_REDIRECT_SESSION_KEY = "google_oauth_redirect_uri"
 
 def _build_client_config() -> dict | None:
     """Load OAuth client config from credentials file or Streamlit secrets."""
+    if "gcp_credentials" in st.secrets:
+        secret_cfg = st.secrets["gcp_credentials"]
+        if "web" in secret_cfg:
+            return {"web": dict(secret_cfg["web"])}
+        if "installed" in secret_cfg:
+            return {"web": dict(secret_cfg["installed"])}
+
+        return {
+            "web": {
+                "client_id": secret_cfg["client_id"],
+                "project_id": secret_cfg.get("project_id", ""),
+                "auth_uri": secret_cfg["auth_uri"],
+                "token_uri": secret_cfg["token_uri"],
+                "auth_provider_x509_cert_url": secret_cfg["auth_provider_x509_cert_url"],
+                "client_secret": secret_cfg["client_secret"],
+                "redirect_uris": list(secret_cfg["redirect_uris"]),
+            }
+        }
+
     if os.path.exists(CREDENTIALS_FILE):
         with open(CREDENTIALS_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -38,27 +57,7 @@ def _build_client_config() -> dict | None:
             return {"web": data["web"]}
         if "installed" in data:
             return {"web": data["installed"]}
-
-    if "gcp_credentials" not in st.secrets:
-        return None
-
-    secret_cfg = st.secrets["gcp_credentials"]
-    if "web" in secret_cfg:
-        return {"web": dict(secret_cfg["web"])}
-    if "installed" in secret_cfg:
-        return {"web": dict(secret_cfg["installed"])}
-
-    return {
-        "web": {
-            "client_id": secret_cfg["client_id"],
-            "project_id": secret_cfg.get("project_id", ""),
-            "auth_uri": secret_cfg["auth_uri"],
-            "token_uri": secret_cfg["token_uri"],
-            "auth_provider_x509_cert_url": secret_cfg["auth_provider_x509_cert_url"],
-            "client_secret": secret_cfg["client_secret"],
-            "redirect_uris": list(secret_cfg["redirect_uris"]),
-        }
-    }
+    return None
 
 st.set_page_config(
     page_title="Sheet → Drive Uploader",
