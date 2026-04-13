@@ -15,7 +15,7 @@ load_dotenv()
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
+from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
@@ -24,38 +24,41 @@ OAUTH_LOCAL_SERVER_PORT = int(os.getenv("OAUTH_LOCAL_SERVER_PORT", 8080))
 DOWNLOAD_DIR = Path("downloads")
 DOWNLOAD_DIR.mkdir(exist_ok=True)
 SCOPES = ["https://www.googleapis.com/auth/drive.file"]
-TOKEN_FILE = "token.json"
 CREDENTIALS_FILE = "credentials.json"
+USER_TOKEN_SESSION_KEY = "google_user_token"
+OAUTH_STATE_SESSION_KEY = "google_oauth_state"
+OAUTH_REDIRECT_SESSION_KEY = "google_oauth_redirect_uri"
 
-# Write credentials.json from Streamlit Secrets if running on the cloud
-if not os.path.exists(CREDENTIALS_FILE) and "gcp_credentials" in st.secrets:
-    creds_data = {
-        "installed": {
-            "client_id": st.secrets["gcp_credentials"]["client_id"],
-            "project_id": st.secrets["gcp_credentials"]["project_id"],
-            "auth_uri": st.secrets["gcp_credentials"]["auth_uri"],
-            "token_uri": st.secrets["gcp_credentials"]["token_uri"],
-            "auth_provider_x509_cert_url": st.secrets["gcp_credentials"]["auth_provider_x509_cert_url"],
-            "client_secret": st.secrets["gcp_credentials"]["client_secret"],
-            "redirect_uris": list(st.secrets["gcp_credentials"]["redirect_uris"]),
+def _build_client_config() -> dict | None:
+    """Load OAuth client config from credentials file or Streamlit secrets."""
+    if os.path.exists(CREDENTIALS_FILE):
+        with open(CREDENTIALS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if "web" in data:
+            return {"web": data["web"]}
+        if "installed" in data:
+            return {"web": data["installed"]}
+
+    if "gcp_credentials" not in st.secrets:
+        return None
+
+    secret_cfg = st.secrets["gcp_credentials"]
+    if "web" in secret_cfg:
+        return {"web": dict(secret_cfg["web"])}
+    if "installed" in secret_cfg:
+        return {"web": dict(secret_cfg["installed"])}
+
+    return {
+        "web": {
+            "client_id": secret_cfg["client_id"],
+            "project_id": secret_cfg.get("project_id", ""),
+            "auth_uri": secret_cfg["auth_uri"],
+            "token_uri": secret_cfg["token_uri"],
+            "auth_provider_x509_cert_url": secret_cfg["auth_provider_x509_cert_url"],
+            "client_secret": secret_cfg["client_secret"],
+            "redirect_uris": list(secret_cfg["redirect_uris"]),
         }
     }
-    with open(CREDENTIALS_FILE, "w") as f:
-        json.dump(creds_data, f)
-
-# Write token.json from Streamlit Secrets if running on the cloud
-if not os.path.exists(TOKEN_FILE) and "gcp_token" in st.secrets:
-    token_data = {
-        "token": st.secrets["gcp_token"]["token"],
-        "refresh_token": st.secrets["gcp_token"]["refresh_token"],
-        "token_uri": st.secrets["gcp_token"]["token_uri"],
-        "client_id": st.secrets["gcp_token"]["client_id"],
-        "client_secret": st.secrets["gcp_token"]["client_secret"],
-        "scopes": list(st.secrets["gcp_token"]["scopes"]),
-        "universe_domain": st.secrets["gcp_token"]["universe_domain"],
-    }
-    with open(TOKEN_FILE, "w") as f:
-        json.dump(token_data, f)
 
 st.set_page_config(
     page_title="Sheet → Drive Uploader",
@@ -85,21 +88,73 @@ st.markdown("""
 # ═══════════════════════════════════════════
 
 def get_drive_service():
-    """Authenticate and return a Google Drive API service object."""
-    creds = None
+    """Return Drive API service using per-user OAuth credentials in session."""
+    token_info = st.session_state.get(USER_TOKEN_SESSION_KEY)
+    if not token_info:
+        return None
 
-    if os.path.exists(TOKEN_FILE):
-        creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
-
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
+    creds = Credentials.from_authorized_user_info(token_info, SCOPES)
+    if not creds.valid:
+        if creds.expired and creds.refresh_token:
             creds.refresh(Request())
-            with open(TOKEN_FILE, "w") as token:
-                token.write(creds.to_json())
+            st.session_state[USER_TOKEN_SESSION_KEY] = json.loads(creds.to_json())
         else:
-            return None  # Cannot open browser on cloud — token must come from Secrets
+            return None
 
     return build("drive", "v3", credentials=creds)
+
+
+def _get_redirect_uri(client_config: dict) -> str | None:
+    redirect_uris = client_config.get("web", {}).get("redirect_uris", [])
+    if not redirect_uris:
+        return None
+
+    configured_uri = os.getenv("OAUTH_REDIRECT_URI")
+    if configured_uri:
+        return configured_uri
+
+    return redirect_uris[0]
+
+
+def _begin_google_login(client_config: dict) -> str | None:
+    redirect_uri = _get_redirect_uri(client_config)
+    if not redirect_uri:
+        return None
+
+    flow = Flow.from_client_config(client_config, SCOPES)
+    flow.redirect_uri = redirect_uri
+    auth_url, state = flow.authorization_url(
+        access_type="offline",
+        include_granted_scopes="true",
+        prompt="consent",
+    )
+    st.session_state[OAUTH_STATE_SESSION_KEY] = state
+    st.session_state[OAUTH_REDIRECT_SESSION_KEY] = redirect_uri
+    return auth_url
+
+
+def _complete_google_login(client_config: dict):
+    params = st.query_params
+    code = params.get("code")
+    incoming_state = params.get("state")
+    if not code:
+        return
+
+    expected_state = st.session_state.get(OAUTH_STATE_SESSION_KEY)
+    redirect_uri = st.session_state.get(OAUTH_REDIRECT_SESSION_KEY) or _get_redirect_uri(client_config)
+    if not expected_state or not redirect_uri or incoming_state != expected_state:
+        st.error("OAuth state mismatch. Please login again.")
+        st.stop()
+
+    flow = Flow.from_client_config(client_config, SCOPES, state=expected_state)
+    flow.redirect_uri = redirect_uri
+    flow.fetch_token(code=code)
+    st.session_state[USER_TOKEN_SESSION_KEY] = json.loads(flow.credentials.to_json())
+    st.session_state.pop(OAUTH_STATE_SESSION_KEY, None)
+    st.session_state.pop(OAUTH_REDIRECT_SESSION_KEY, None)
+    st.query_params.clear()
+    st.success("✅ Signed in with your Google account.")
+    st.rerun()
 
 
 def create_drive_folder(service, folder_name, parent_id=None):
@@ -257,34 +312,38 @@ st.caption(
 )
 
 # ── Sidebar: Auth Status ──
+client_config = _build_client_config()
+if client_config:
+    _complete_google_login(client_config)
+
 with st.sidebar:
     st.header("🔐 Google Drive Auth")
 
-    if os.path.exists(TOKEN_FILE):
-        st.success("✅ Authenticated with Google Drive")
-        if st.button("🔄 Re-authenticate"):
-            os.remove(TOKEN_FILE)
+    if get_drive_service():
+        st.success("✅ Signed in with your Google account")
+        if st.button("🔓 Sign out"):
+            st.session_state.pop(USER_TOKEN_SESSION_KEY, None)
+            st.session_state.pop(OAUTH_STATE_SESSION_KEY, None)
+            st.session_state.pop(OAUTH_REDIRECT_SESSION_KEY, None)
             st.rerun()
-    elif os.path.exists(CREDENTIALS_FILE):
-        st.warning("⚠️ Not authenticated yet")
+    elif client_config:
+        st.warning("⚠️ Not signed in yet")
         st.info(
-            "Click the button below. A browser window will open "
-            "asking you to sign in with Google."
+            "Each user must sign in individually. "
+            "Click below to continue with Google OAuth."
         )
-        if st.button("🔑 Authenticate with Google", type="primary"):
-            with st.spinner("Opening browser for authentication..."):
-                service = get_drive_service()
-                if service:
-                    st.success("✅ Authenticated successfully!")
-                    time.sleep(1)
-                    st.rerun()
-                else:
-                    st.error("Authentication failed.")
+        auth_url = _begin_google_login(client_config)
+        if auth_url:
+            st.link_button("🔑 Sign in with Google", auth_url, use_container_width=True)
+        else:
+            st.error(
+                "No redirect URI configured. Add at least one redirect URI in "
+                "`gcp_credentials.redirect_uris` (or set `OAUTH_REDIRECT_URI`)."
+            )
     else:
         st.error(
-            "❌ `credentials.json` not found!\n\n"
-            "Place your Google OAuth credentials file "
-            "in the same folder as this app."
+            "❌ Google OAuth config missing.\n\n"
+            "Add `credentials.json` or `gcp_credentials` in Streamlit secrets."
         )
 
     st.divider()
@@ -338,7 +397,7 @@ if sheet_url:
     # ── Step 3: Download & Upload ──
     st.header("② Download & Upload to Drive")
 
-    auth_ready = os.path.exists(TOKEN_FILE)
+    auth_ready = bool(get_drive_service())
     if not auth_ready:
         st.warning("👈 Please authenticate with Google Drive in the sidebar first.")
 
