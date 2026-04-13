@@ -370,6 +370,9 @@ with st.sidebar:
                 "🔑 Sign in with Google</a>",
                 unsafe_allow_html=True,
             )
+            with st.expander("Having trouble opening Google login?"):
+                st.caption("Copy this URL and open it directly in a new browser tab:")
+                st.code(auth_url)
         else:
             st.error(
                 "No redirect URI configured. Add at least one redirect URI in "
