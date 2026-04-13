@@ -143,10 +143,29 @@ def _complete_google_login(client_config: dict):
     params = st.query_params
     code = params.get("code")
     incoming_state = params.get("state")
+    oauth_error = params.get("error")
+    oauth_error_description = params.get("error_description")
     if isinstance(code, list):
         code = code[0] if code else None
     if isinstance(incoming_state, list):
         incoming_state = incoming_state[0] if incoming_state else None
+    if isinstance(oauth_error, list):
+        oauth_error = oauth_error[0] if oauth_error else None
+    if isinstance(oauth_error_description, list):
+        oauth_error_description = oauth_error_description[0] if oauth_error_description else None
+
+    if oauth_error:
+        st.error(
+            "Google OAuth failed: "
+            f"{oauth_error}"
+            + (f" — {oauth_error_description}" if oauth_error_description else "")
+        )
+        st.info(
+            "Check Google Cloud OAuth settings (Audience/Test users/redirect URI/Data Access), "
+            "then click Sign in again."
+        )
+        st.stop()
+
     if not code:
         return
 
