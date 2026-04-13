@@ -28,6 +28,7 @@ CREDENTIALS_FILE = "credentials.json"
 USER_TOKEN_SESSION_KEY = "google_user_token"
 OAUTH_STATE_SESSION_KEY = "google_oauth_state"
 OAUTH_REDIRECT_SESSION_KEY = "google_oauth_redirect_uri"
+OAUTH_STATE_TTL_SECONDS = 15 * 60
 
 def _build_client_config() -> dict | None:
     """Load OAuth client config from credentials file or Streamlit secrets."""
@@ -58,6 +59,12 @@ def _build_client_config() -> dict | None:
         if "installed" in data:
             return {"web": data["installed"]}
     return None
+
+
+@st.cache_resource
+def _oauth_state_store() -> dict:
+    """Shared in-memory store for pending OAuth states across reruns/sessions."""
+    return {}
 
 st.set_page_config(
     page_title="Sheet → Drive Uploader",
@@ -133,6 +140,15 @@ def _begin_google_login(client_config: dict) -> str | None:
         include_granted_scopes="true",
         prompt="consent",
     )
+    # Keep a short-lived server-side record so OAuth callback can survive
+    # Streamlit session resets/new tabs.
+    state_store = _oauth_state_store()
+    now = time.time()
+    expired_keys = [k for k, v in state_store.items() if now - v.get("created_at", 0) > OAUTH_STATE_TTL_SECONDS]
+    for key in expired_keys:
+        state_store.pop(key, None)
+    state_store[state] = {"redirect_uri": redirect_uri, "created_at": now}
+
     st.session_state[OAUTH_STATE_SESSION_KEY] = state
     st.session_state[OAUTH_REDIRECT_SESSION_KEY] = redirect_uri
     return auth_url
@@ -169,17 +185,31 @@ def _complete_google_login(client_config: dict):
         return
 
     expected_state = st.session_state.get(OAUTH_STATE_SESSION_KEY)
-    redirect_uri = st.session_state.get(OAUTH_REDIRECT_SESSION_KEY) or _get_redirect_uri(client_config)
-    if not expected_state or not redirect_uri or incoming_state != expected_state:
+    state_store = _oauth_state_store()
+    stored_state = state_store.get(incoming_state) if incoming_state else None
+
+    state_matches = incoming_state and (
+        incoming_state == expected_state or stored_state is not None
+    )
+    redirect_uri = (
+        st.session_state.get(OAUTH_REDIRECT_SESSION_KEY)
+        or (stored_state.get("redirect_uri") if stored_state else None)
+        or _get_redirect_uri(client_config)
+    )
+
+    if not state_matches or not redirect_uri:
         st.error("OAuth state mismatch. Please sign in again from the same app tab.")
         st.stop()
 
-    flow = Flow.from_client_config(client_config, SCOPES, state=expected_state)
+    flow_state = expected_state if incoming_state == expected_state else incoming_state
+    flow = Flow.from_client_config(client_config, SCOPES, state=flow_state)
     flow.redirect_uri = redirect_uri
     flow.fetch_token(code=code)
     st.session_state[USER_TOKEN_SESSION_KEY] = json.loads(flow.credentials.to_json())
     st.session_state.pop(OAUTH_STATE_SESSION_KEY, None)
     st.session_state.pop(OAUTH_REDIRECT_SESSION_KEY, None)
+    if incoming_state:
+        state_store.pop(incoming_state, None)
     st.query_params.clear()
     st.success("✅ Signed in with your Google account.")
     st.rerun()
