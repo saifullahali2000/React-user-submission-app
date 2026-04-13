@@ -28,6 +28,7 @@ CREDENTIALS_FILE = "credentials.json"
 USER_TOKEN_SESSION_KEY = "google_user_token"
 OAUTH_STATE_SESSION_KEY = "google_oauth_state"
 OAUTH_REDIRECT_SESSION_KEY = "google_oauth_redirect_uri"
+OAUTH_CODE_VERIFIER_SESSION_KEY = "google_oauth_code_verifier"
 OAUTH_STATE_TTL_SECONDS = 15 * 60
 
 def _build_client_config() -> dict | None:
@@ -140,6 +141,7 @@ def _begin_google_login(client_config: dict) -> str | None:
         include_granted_scopes="true",
         prompt="consent",
     )
+    code_verifier = getattr(flow.oauth2session._client, "code_verifier", None)
     # Keep a short-lived server-side record so OAuth callback can survive
     # Streamlit session resets/new tabs.
     state_store = _oauth_state_store()
@@ -147,10 +149,16 @@ def _begin_google_login(client_config: dict) -> str | None:
     expired_keys = [k for k, v in state_store.items() if now - v.get("created_at", 0) > OAUTH_STATE_TTL_SECONDS]
     for key in expired_keys:
         state_store.pop(key, None)
-    state_store[state] = {"redirect_uri": redirect_uri, "created_at": now}
+    state_store[state] = {
+        "redirect_uri": redirect_uri,
+        "code_verifier": code_verifier,
+        "created_at": now,
+    }
 
     st.session_state[OAUTH_STATE_SESSION_KEY] = state
     st.session_state[OAUTH_REDIRECT_SESSION_KEY] = redirect_uri
+    if code_verifier:
+        st.session_state[OAUTH_CODE_VERIFIER_SESSION_KEY] = code_verifier
     return auth_url
 
 
@@ -196,6 +204,10 @@ def _complete_google_login(client_config: dict):
         or (stored_state.get("redirect_uri") if stored_state else None)
         or _get_redirect_uri(client_config)
     )
+    code_verifier = (
+        st.session_state.get(OAUTH_CODE_VERIFIER_SESSION_KEY)
+        or (stored_state.get("code_verifier") if stored_state else None)
+    )
 
     if not state_matches or not redirect_uri:
         st.error("OAuth state mismatch. Please sign in again from the same app tab.")
@@ -204,10 +216,14 @@ def _complete_google_login(client_config: dict):
     flow_state = expected_state if incoming_state == expected_state else incoming_state
     flow = Flow.from_client_config(client_config, SCOPES, state=flow_state)
     flow.redirect_uri = redirect_uri
-    flow.fetch_token(code=code)
+    fetch_kwargs = {"code": code}
+    if code_verifier:
+        fetch_kwargs["code_verifier"] = code_verifier
+    flow.fetch_token(**fetch_kwargs)
     st.session_state[USER_TOKEN_SESSION_KEY] = json.loads(flow.credentials.to_json())
     st.session_state.pop(OAUTH_STATE_SESSION_KEY, None)
     st.session_state.pop(OAUTH_REDIRECT_SESSION_KEY, None)
+    st.session_state.pop(OAUTH_CODE_VERIFIER_SESSION_KEY, None)
     if incoming_state:
         state_store.pop(incoming_state, None)
     st.query_params.clear()
