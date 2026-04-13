@@ -143,13 +143,17 @@ def _complete_google_login(client_config: dict):
     params = st.query_params
     code = params.get("code")
     incoming_state = params.get("state")
+    if isinstance(code, list):
+        code = code[0] if code else None
+    if isinstance(incoming_state, list):
+        incoming_state = incoming_state[0] if incoming_state else None
     if not code:
         return
 
     expected_state = st.session_state.get(OAUTH_STATE_SESSION_KEY)
     redirect_uri = st.session_state.get(OAUTH_REDIRECT_SESSION_KEY) or _get_redirect_uri(client_config)
     if not expected_state or not redirect_uri or incoming_state != expected_state:
-        st.error("OAuth state mismatch. Please login again.")
+        st.error("OAuth state mismatch. Please sign in again from the same app tab.")
         st.stop()
 
     flow = Flow.from_client_config(client_config, SCOPES, state=expected_state)
@@ -340,7 +344,14 @@ with st.sidebar:
         )
         auth_url = _begin_google_login(client_config)
         if auth_url:
-            st.link_button("🔑 Sign in with Google", auth_url, use_container_width=True)
+            st.markdown(
+                f'<a href="{auth_url}" target="_self" '
+                'style="display:inline-block;width:100%;text-align:center;'
+                'padding:0.5rem 1rem;background-color:#ff4b4b;color:white;'
+                'text-decoration:none;border-radius:0.5rem;font-weight:600;">'
+                "🔑 Sign in with Google</a>",
+                unsafe_allow_html=True,
+            )
         else:
             st.error(
                 "No redirect URI configured. Add at least one redirect URI in "
